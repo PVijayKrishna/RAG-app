@@ -3,6 +3,7 @@ import io
 import uuid
 import requests
 import csv
+import hashlib
 from typing import List, Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +34,9 @@ CHROMA_TENANT = os.getenv("CHROMA_TENANT", "")
 CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "")
 CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "")
 
+# In-memory store of processed sources
+added_sources = []
+
 # We initialize clients dynamically if values aren't present so startup doesn't crash on invalid credentials, 
 # but log warning.
 collection = None
@@ -47,6 +51,24 @@ try:
         collection = chroma_client.get_or_create_collection(
             name="rag_collection_v2"
         )
+        
+        # Fetch existing sources from ChromaDB to populate added_sources on startup
+        try:
+            all_data = collection.get(include=["metadatas"])
+            if all_data and "metadatas" in all_data and all_data["metadatas"]:
+                unique_sources = {}
+                for meta in all_data["metadatas"]:
+                    if meta and isinstance(meta, dict) and "source" in meta:
+                        src_name = meta["source"]
+                        src_type = meta.get("type", "unknown")
+                        if src_name not in unique_sources:
+                            deterministic_id = hashlib.md5(src_name.encode('utf-8')).hexdigest()
+                            unique_sources[src_name] = {"id": deterministic_id, "name": src_name, "type": src_type}
+                added_sources = list(unique_sources.values())
+                print(f"Loaded {len(added_sources)} existing sources from ChromaDB.")
+        except Exception as db_err:
+            print(f"Failed to infer existing sources from ChromaDB: {db_err}")
+            
     else:
         print("WARNING: ChromaDB environment variables missing. Vector database not initialized.")
 except Exception as e:
@@ -62,9 +84,6 @@ text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
     chunk_overlap=100
 )
-
-# In-memory store of processed sources
-added_sources = []
 
 class ScrapeRequest(BaseModel):
     url: str
@@ -147,7 +166,9 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
         metadatas=metadatas
     )
 
-    added_sources.append({"id": str(uuid.uuid4()), "name": source_name, "type": source_type})
+    deterministic_id = hashlib.md5(source_name.encode('utf-8')).hexdigest()
+    if not any(s["id"] == deterministic_id for s in added_sources):
+        added_sources.append({"id": deterministic_id, "name": source_name, "type": source_type})
     return len(splits)
 
 @app.post("/api/scrape")
@@ -232,8 +253,8 @@ async def chat(req: ChatRequest):
         # Construct prompt for the LLM
         prompt = f"You are an intelligent assistant. Use the following context documents to answer the user's question. If the context does not contain the answer, say you don't know based on the provided documents.\n\nContext:\n{context_text}\n\nUser Question: {req.message}\n\nAnswer:"
         
-        # Call local Ollama
-        ollama_url = "http://localhost:11434/api/generate"
+        # Call LLM (Ollama or other compatible endpoint)
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
         payload = {
             "model": "llama3.2:1b",
             "prompt": prompt,
@@ -253,5 +274,4 @@ async def chat(req: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8001))  # 8001 for local default
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
