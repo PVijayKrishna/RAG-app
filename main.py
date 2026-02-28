@@ -1,4 +1,9 @@
 import os
+# Must set these thread-limiting environment variables BEFORE PyTorch/SentenceTransformers are imported!
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import io
 import uuid
 import requests
@@ -14,6 +19,10 @@ from bs4 import BeautifulSoup
 
 # Dependencies for RAG & Extractions
 import chromadb
+import torch
+# Manually limit torch threads before loading the model
+torch.set_num_threads(1)
+
 from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader

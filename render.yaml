@@ -3,8 +3,8 @@ services:
     name: rag-chatbot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT
+    buildCommand: pip install -r requirements.txt && python download_model.py
+    startCommand: gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
