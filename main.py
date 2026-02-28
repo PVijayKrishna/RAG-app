@@ -39,9 +39,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # Configuration & Clients
-CHROMA_TENANT = os.getenv("CHROMA_TENANT", "")
-CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "")
-CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "")
+# Render's UI sometimes injects line breaks or spaces when copying and pasting. We aggressively sanitize it here.
+CHROMA_TENANT = os.getenv("CHROMA_TENANT", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
+CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
+CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
 
 # In-memory store of processed sources
 added_sources = []
