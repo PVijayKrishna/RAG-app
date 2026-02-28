@@ -23,8 +23,10 @@ load_dotenv()
 
 app = FastAPI(title="RAG Chatbot API")
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Mount frontend files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # Configuration & Clients
 CHROMA_TENANT = os.getenv("CHROMA_TENANT", "")
@@ -77,7 +79,7 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def serve_index():
-    return FileResponse("static/index.html")
+    return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
 
 @app.get("/api/sources")
 def get_sources():
