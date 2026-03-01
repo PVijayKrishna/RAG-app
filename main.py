@@ -10,7 +10,7 @@ import requests
 import csv
 import hashlib
 from typing import List, Optional
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -281,6 +281,33 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=503, detail=f"Failed to connect to local Ollama (ensure it is running on port 11434): {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Secure dependency check: Only allow access if the correct token header is supplied
+def verify_admin_token(x_admin_token: str = Header(...)):
+    expected_token = os.getenv("ADMIN_TOKEN", "my-super-secret-token") 
+    if not expected_token or x_admin_token != expected_token:
+        raise HTTPException(status_code=403, detail="Not authorized to view database contents.")
+    return True
+
+@app.get("/api/debug/chroma", tags=["Debug"])
+def get_chroma_db_contents(authorized: bool = Depends(verify_admin_token)):
+    if not collection:
+        raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
+        
+    try:
+        # Request all content from collection
+        results = collection.get(
+            include=["documents", "metadatas"]
+        )
+        
+        return {
+            "total_documents": len(results["ids"]),
+            "ids": results["ids"],
+            "metadatas": results["metadatas"],
+            "documents": results["documents"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch db contents: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -349,4 +349,74 @@ document.addEventListener('DOMContentLoaded', () => {
             fileInput.value = ''; // Reset input
         }
     }
+
+    // Database View Logic
+    const viewDbBtn = document.getElementById('view-db-btn');
+    const dbModal = document.getElementById('db-modal');
+    const closeDbModal = document.getElementById('close-db-modal');
+    const dbContentArea = document.getElementById('db-content-area');
+    const dbCount = document.getElementById('db-count');
+
+    async function loadDatabaseContents() {
+        dbContentArea.innerHTML = '<p style="text-align: center; color: #a1a1aa; padding: 20px;">Fetching from Database...</p>';
+        try {
+            // Note: Update "my-super-secret-token" to whatever you put in .env for ADMIN_TOKEN
+            const response = await fetch('/api/debug/chroma', {
+                headers: {
+                    'X-Admin-Token': 'my-super-secret-token'
+                }
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                dbCount.textContent = data.total_documents;
+                if (data.total_documents === 0) {
+                    dbContentArea.innerHTML = '<p style="text-align: center; color: #a1a1aa; padding: 20px;">Database is currently empty.</p>';
+                    return;
+                }
+
+                dbContentArea.innerHTML = '';
+                for (let i = 0; i < data.total_documents; i++) {
+                    const id = data.ids[i];
+                    const metadata = data.metadatas[i];
+                    const content = data.documents[i];
+
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'db-item';
+
+                    itemDiv.innerHTML = `
+                        <div class="db-item-header">
+                            <span class="db-item-id">ID: ${id}</span>
+                            <span class="db-item-source">Source: <span>${metadata && metadata.source ? metadata.source : 'Unknown'}</span></span>
+                        </div>
+                        <div class="db-item-content">${content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+                    `;
+                    dbContentArea.appendChild(itemDiv);
+                }
+            } else {
+                dbContentArea.innerHTML = `<p style="text-align: center; color: #ef4444; padding: 20px;">Error: ${data.detail || 'Failed to fetch database'}</p>`;
+            }
+        } catch (error) {
+            dbContentArea.innerHTML = `<p style="text-align: center; color: #ef4444; padding: 20px;">Connection Error: ${error.message}</p>`;
+        }
+    }
+
+    if (viewDbBtn) {
+        viewDbBtn.addEventListener('click', () => {
+            dbModal.classList.add('show');
+            loadDatabaseContents();
+        });
+    }
+
+    if (closeDbModal) {
+        closeDbModal.addEventListener('click', () => {
+            dbModal.classList.remove('show');
+        });
+    }
+
+    window.addEventListener('click', (e) => {
+        if (e.target === dbModal) {
+            dbModal.classList.remove('show');
+        }
+    });
 });
