@@ -263,22 +263,27 @@ async def chat(req: ChatRequest):
         # Construct prompt for the LLM
         prompt = f"You are an intelligent assistant. Use the following context documents to answer the user's question. If the context does not contain the answer, say you don't know based on the provided documents.\n\nContext:\n{context_text}\n\nUser Question: {req.message}\n\nAnswer:"
         
-        # Call LLM (Ollama or other compatible endpoint)
-        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-        payload = {
-            "model": "llama3.2:1b",
-            "prompt": prompt,
-            "stream": False
-        }
+        # Call Gemini API on Render instead of local Ollama
+        try:
+            from google import genai
+        except ImportError:
+            raise HTTPException(status_code=500, detail="google-genai library is not installed. Add it to requirements.txt.")
+            
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is missing.")
+            
+        # Initialize Gemini Client
+        client = genai.Client(api_key=api_key)
         
-        response = requests.post(ollama_url, json=payload, timeout=120)
-        response.raise_for_status()
+        # Use gemini-2.5-flash as the default fast & cheap model
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
         
-        data = response.json()
-        return {"response": data.get("response", "No response generated")}
+        return {"response": response.text}
         
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to connect to local Ollama (ensure it is running on port 11434): {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

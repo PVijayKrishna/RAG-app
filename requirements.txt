@@ -12,3 +12,4 @@ pypdf
 python-docx
 langchain-text-splitters
 gunicorn
+google-genai
