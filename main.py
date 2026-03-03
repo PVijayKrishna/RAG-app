@@ -271,7 +271,7 @@ async def chat(req: ChatRequest):
             
         api_key = os.getenv("GEMINI_API_KEY", "")
         if not api_key:
-            raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is missing.")
+            return {"error": "GEMINI_API_KEY environment variable is missing."}
             
         # Initialize Gemini Client
         client = genai.Client(api_key=api_key)
@@ -289,7 +289,7 @@ async def chat(req: ChatRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
 
 # Secure dependency check: Only allow access if the correct token header is supplied
 def verify_admin_token(x_admin_token: str = Header(...)):
