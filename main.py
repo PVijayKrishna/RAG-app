@@ -28,14 +28,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 from docx import Document
 
-# Load Environment Variables
-load_dotenv()
+# Load Environment Variables explicitly from the app directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(BASE_DIR, ".env")
+load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="RAG Chatbot API")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Mount frontend files
+# Mount frontend files (BASE_DIR is defined above)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # Configuration & Clients
@@ -284,7 +284,11 @@ async def chat(req: ChatRequest):
         
         return {"response": response.text}
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 # Secure dependency check: Only allow access if the correct token header is supplied
