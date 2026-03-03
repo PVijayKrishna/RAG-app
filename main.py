@@ -241,7 +241,7 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+def chat(req: ChatRequest):
     if not collection:
         raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
         
