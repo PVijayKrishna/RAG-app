@@ -1,4 +1,9 @@
 import os
+# Must set these thread-limiting environment variables BEFORE PyTorch/SentenceTransformers are imported!
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import io
 import uuid
 import requests
@@ -11,7 +16,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+
+# Dependencies for RAG & Extractions
 import chromadb
+import torch
+# Manually limit torch threads before loading the model
+torch.set_num_threads(1)
+
+from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 from docx import Document
@@ -21,23 +33,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path=env_path)
 
-# Ensure Gemini is valid beforehand to avoid runtime surprises
-try:
-    from google import genai
-except ImportError:
-    print("Warning: google-genai library missing!")
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-gemini_client = None
-if GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
 app = FastAPI(title="RAG Chatbot API")
 
 # Mount frontend files (BASE_DIR is defined above)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # Configuration & Clients
+# Render's UI sometimes injects line breaks or spaces when copying and pasting. We aggressively sanitize it here.
 CHROMA_TENANT = os.getenv("CHROMA_TENANT", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
 CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
 CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
@@ -45,6 +47,8 @@ CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "").replace('\n', '').replace('\r',
 # In-memory store of processed sources
 added_sources = []
 
+# We initialize clients dynamically if values aren't present so startup doesn't crash on invalid credentials, 
+# but log warning.
 collection = None
 try:
     if CHROMA_TENANT and CHROMA_DATABASE and CHROMA_API_KEY:
@@ -53,12 +57,12 @@ try:
             database=CHROMA_DATABASE,
             api_key=CHROMA_API_KEY
         )
-        # Use a new collection name 
+        # Use a new collection name to avoid the "soft deleted" error in Chroma Cloud
         collection = chroma_client.get_or_create_collection(
-            name="rag_collection_gemini" 
+            name="rag_collection_v2"
         )
         
-        # Fetch existing sources from ChromaDB
+        # Fetch existing sources from ChromaDB to populate added_sources on startup
         try:
             all_data = collection.get(include=["metadatas"])
             if all_data and "metadatas" in all_data and all_data["metadatas"]:
@@ -80,6 +84,10 @@ try:
 except Exception as e:
     print(f"Failed to initialize Chroma Cloud Client: {e}")
 
+# Load the embeddings model
+print("Loading sentence-transformer all-MiniLM-L6-v2...")
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+print("Model loaded.")
 
 # Setting up Text Splitter
 text_splitter = RecursiveCharacterTextSplitter(
@@ -98,22 +106,6 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
 
-def generate_embeddings(texts: List[str]) -> List[List[float]]:
-    """Helper function to fetch embeddings from Google GenAI."""
-    if not gemini_client:
-         raise Exception("GEMINI_API_KEY is not configured.")
-         
-    # Google's standard embedding model for semantic retrieval
-    result = gemini_client.models.embed_content(
-        model="text-embedding-004", 
-        contents=texts,
-    )
-    
-    # embed_content returns an object where .embeddings is a list of Embedding objects.
-    # We must extract the .values (the float array) from each one for ChromaDB.
-    return [e.values for e in result.embeddings]
-
-
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
@@ -127,6 +119,8 @@ def clear_all_sources():
     global added_sources
     if collection:
         try:
+            # Re-create the collection or delete everything
+            # The exact method depends on chromadb version, but typically we can delete by where condition or re-create
             for source in added_sources:
                 collection.delete(where={"source": source["name"]})
         except Exception as e:
@@ -148,12 +142,15 @@ def delete_source(source_id: str):
     
     if collection:
         try:
+            # Delete from ChromaDB based on source metadata
             collection.delete(where={"source": source_name})
         except Exception as e:
             print(f"Failed to delete from ChromaDB: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to delete from vector db: {e}")
             
+    # Remove from in-memory list
     added_sources = [s for s in added_sources if s["id"] != source_id]
+    
     return {"status": "success", "message": f"Successfully deleted {source_name}"}
 
 def add_texts_to_chroma(text: str, source_name: str, source_type: str):
@@ -168,12 +165,7 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
     if not splits:
         raise HTTPException(status_code=400, detail="Text couldn't be chunked.")
 
-    # Call our new API-based embedding function!
-    try:
-        embeddings = generate_embeddings(splits)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(e)}")
-        
+    embeddings = embedding_model.encode(splits).tolist()
     ids = [str(uuid.uuid4()) for _ in splits]
     metadatas = [{"source": source_name, "type": source_type} for _ in splits]
 
@@ -190,12 +182,13 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
     return len(splits)
 
 @app.post("/api/scrape")
-def scrape_url(req: ScrapeRequest):
+async def scrape_url(req: ScrapeRequest):
     try:
         response = requests.get(req.url, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, "html.parser")
+        # Remove script and style elements
         for script in soup(["script", "style"]):
             script.extract()
             
@@ -247,22 +240,18 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
-
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     if not collection:
         raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
         
-    if not gemini_client:
-         raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is missing.")
-         
     try:
-        # Generate embedding for the user's query
-        query_embedding = generate_embeddings([req.message])[0]
+        # Generate embedding for the query
+        query_embedding = embedding_model.encode([req.message]).tolist()
         
         # Retrieve top 5 most relevant documents
         results = collection.query(
-            query_embeddings=[query_embedding],
+            query_embeddings=query_embedding,
             n_results=5
         )
         
@@ -274,8 +263,21 @@ def chat(req: ChatRequest):
         # Construct prompt for the LLM
         prompt = f"You are an intelligent assistant. Use the following context documents to answer the user's question. If the context does not contain the answer, say you don't know based on the provided documents.\n\nContext:\n{context_text}\n\nUser Question: {req.message}\n\nAnswer:"
         
-        # Prompt the model to get a response
-        response = gemini_client.models.generate_content(
+        # Call Gemini API on Render instead of local Ollama
+        try:
+            from google import genai
+        except ImportError:
+            raise HTTPException(status_code=500, detail="google-genai library is not installed. Add it to requirements.txt.")
+            
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is missing.")
+            
+        # Initialize Gemini Client
+        client = genai.Client(api_key=api_key)
+        
+        # Use gemini-2.5-flash as the default fast & cheap model
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
         )
@@ -302,6 +304,7 @@ def get_chroma_db_contents(authorized: bool = Depends(verify_admin_token)):
         raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
         
     try:
+        # Request all content from collection
         results = collection.get(
             include=["documents", "metadatas"]
         )
