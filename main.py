@@ -87,10 +87,16 @@ try:
 except Exception as e:
     print(f"Failed to initialize Chroma Cloud Client: {e}")
 
-# Load the embeddings model
-print("Loading sentence-transformer all-MiniLM-L6-v2...")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("Model loaded.")
+# Load the embeddings model lazily to prevent worker timeout during app startup
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        print("Loading sentence-transformer all-MiniLM-L6-v2...")
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("Model loaded.")
+    return embedding_model
 
 # Setting up Text Splitter
 text_splitter = RecursiveCharacterTextSplitter(
@@ -168,7 +174,7 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
     if not splits:
         raise HTTPException(status_code=400, detail="Text couldn't be chunked.")
 
-    embeddings = embedding_model.encode(splits).tolist()
+    embeddings = get_embedding_model().encode(splits).tolist()
     ids = [str(uuid.uuid4()) for _ in splits]
     metadatas = [{"source": source_name, "type": source_type} for _ in splits]
 
@@ -250,7 +256,7 @@ def chat(req: ChatRequest):
         
     try:
         # Generate embedding for the query
-        query_embedding = embedding_model.encode([req.message]).tolist()
+        query_embedding = get_embedding_model().encode([req.message]).tolist()
         
         # Retrieve top 5 most relevant documents
         results = collection.query(
