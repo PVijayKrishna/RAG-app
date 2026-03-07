@@ -4,6 +4,9 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
+# Set Hugging Face home to cache inside application directory
+os.environ["HF_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".huggingface_cache")
+
 import io
 import uuid
 import requests

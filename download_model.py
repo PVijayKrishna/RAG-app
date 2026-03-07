@@ -7,6 +7,9 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
+# Set Hugging Face home to cache inside application directory
+os.environ["HF_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".huggingface_cache")
+
 print("Downloading sentence-transformers/all-MiniLM-L6-v2 during build phase...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 print("Model download complete!")

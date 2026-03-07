@@ -139,7 +139,15 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             removeThinkingIndicator();
-            const data = await response.json();
+
+            let data;
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                data = await response.json();
+            } else {
+                data = { detail: await response.text() };
+                response.ok = false;
+            }
 
             if (response.ok) {
                 appendMessage(data.response, 'bot');
