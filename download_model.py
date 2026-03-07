@@ -6,6 +6,11 @@ from sentence_transformers import SentenceTransformer
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import torch
+torch.set_num_threads(1)
+torch.set_grad_enabled(False)
 
 # Set Hugging Face home to cache inside application directory
 os.environ["HF_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".huggingface_cache")

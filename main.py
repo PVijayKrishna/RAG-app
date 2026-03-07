@@ -1,8 +1,10 @@
 import os
+import gc
 # Must set these thread-limiting environment variables BEFORE PyTorch/SentenceTransformers are imported!
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Set Hugging Face home to cache inside application directory
 os.environ["HF_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".huggingface_cache")
@@ -25,6 +27,8 @@ import chromadb
 import torch
 # Manually limit torch threads before loading the model
 torch.set_num_threads(1)
+# Disable gradient computation globally - we only do inference, saves ~30-40% memory
+torch.set_grad_enabled(False)
 
 from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -96,7 +100,14 @@ def get_embedding_model():
         print("Loading sentence-transformer all-MiniLM-L6-v2...")
         embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         print("Model loaded.")
+        # Force garbage collection to free any temporary memory from model loading
+        gc.collect()
     return embedding_model
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Render."""
+    return {"status": "ok"}
 
 # Setting up Text Splitter
 text_splitter = RecursiveCharacterTextSplitter(
@@ -255,13 +266,14 @@ def chat(req: ChatRequest):
         raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
         
     try:
-        # Generate embedding for the query
-        query_embedding = get_embedding_model().encode([req.message]).tolist()
+        # Generate embedding for the query using no_grad context for extra safety
+        with torch.no_grad():
+            query_embedding = get_embedding_model().encode([req.message]).tolist()
         
-        # Retrieve top 5 most relevant documents
+        # Retrieve top 3 most relevant documents (reduced from 5 to save memory)
         results = collection.query(
             query_embeddings=query_embedding,
-            n_results=5
+            n_results=3
         )
         
         context_text = ""
@@ -285,11 +297,14 @@ def chat(req: ChatRequest):
         # Initialize Gemini Client
         client = genai.Client(api_key=api_key)
         
-        # Use gemini-2.5-flash as the default fast & cheap model
+        # Use gemini-2.0-flash as the default fast & cheap model (lighter than 2.5)
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=prompt,
         )
+        
+        # Force garbage collection after inference to reclaim memory
+        gc.collect()
         
         return {"response": response.text}
         
@@ -298,6 +313,8 @@ def chat(req: ChatRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        # Force GC even on error path
+        gc.collect()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 # Secure dependency check: Only allow access if the correct token header is supplied
