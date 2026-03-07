@@ -284,7 +284,8 @@ def chat(req: ChatRequest):
         client = genai.Client(api_key=api_key)
         
         # Model fallback chain: try multiple models in case one hits quota limits
-        models_to_try = ['gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-2.0-flash']
+        # Each model has separate quotas on the free tier
+        models_to_try = ['gemini-2.0-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash']
         response = None
         last_error = None
         
@@ -302,8 +303,11 @@ def chat(req: ChatRequest):
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                     print(f"Quota exhausted for {model_name}, trying next model...")
                     continue
+                elif "404" in err_str or "NOT_FOUND" in err_str:
+                    print(f"Model {model_name} not available, trying next model...")
+                    continue
                 else:
-                    raise  # Non-quota error, raise immediately
+                    raise  # Non-quota/non-404 error, raise immediately
         
         if response is None:
             raise HTTPException(
