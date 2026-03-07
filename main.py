@@ -283,11 +283,33 @@ def chat(req: ChatRequest):
         # Initialize Gemini Client
         client = genai.Client(api_key=api_key)
         
-        # Use gemini-2.0-flash as the default fast & cheap model
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-        )
+        # Model fallback chain: try multiple models in case one hits quota limits
+        models_to_try = ['gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-2.0-flash']
+        response = None
+        last_error = None
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                print(f"Gemini response from model: {model_name}")
+                break  # Success, stop trying
+            except Exception as model_err:
+                last_error = model_err
+                err_str = str(model_err)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    print(f"Quota exhausted for {model_name}, trying next model...")
+                    continue
+                else:
+                    raise  # Non-quota error, raise immediately
+        
+        if response is None:
+            raise HTTPException(
+                status_code=429, 
+                detail=f"All Gemini models quota exhausted. Please wait a few minutes and try again. Last error: {str(last_error)}"
+            )
         
         # Force garbage collection after inference to reclaim memory
         gc.collect()
