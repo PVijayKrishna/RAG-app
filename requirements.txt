@@ -1,16 +1,14 @@
---index-url https://download.pytorch.org/whl/cpu
---extra-index-url https://pypi.org/simple
-torch
 fastapi
 uvicorn
 python-multipart
 python-dotenv
 beautifulsoup4
 requests
-sentence-transformers
 chromadb
 pypdf
 python-docx
 langchain-text-splitters
 gunicorn
 google-genai
+onnxruntime
+tokenizers

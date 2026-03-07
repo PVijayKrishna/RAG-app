@@ -1,13 +1,11 @@
 import os
 import gc
-# Must set these thread-limiting environment variables BEFORE PyTorch/SentenceTransformers are imported!
+
+# Thread-limiting environment variables
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# Set Hugging Face home to cache inside application directory
-os.environ["HF_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".huggingface_cache")
 
 import io
 import uuid
@@ -24,13 +22,7 @@ from bs4 import BeautifulSoup
 
 # Dependencies for RAG & Extractions
 import chromadb
-import torch
-# Manually limit torch threads before loading the model
-torch.set_num_threads(1)
-# Disable gradient computation globally - we only do inference, saves ~30-40% memory
-torch.set_grad_enabled(False)
-
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 from docx import Document
@@ -54,6 +46,10 @@ CHROMA_API_KEY = os.getenv("CHROMA_API_KEY", "").replace('\n', '').replace('\r',
 # In-memory store of processed sources
 added_sources = []
 
+# Use ChromaDB's built-in default embedding function (lightweight, no PyTorch needed!)
+# This uses onnxruntime internally which is much lighter than PyTorch+SentenceTransformers
+default_ef = embedding_functions.DefaultEmbeddingFunction()
+
 # We initialize clients dynamically if values aren't present so startup doesn't crash on invalid credentials, 
 # but log warning.
 collection = None
@@ -64,9 +60,9 @@ try:
             database=CHROMA_DATABASE,
             api_key=CHROMA_API_KEY
         )
-        # Use a new collection name to avoid the "soft deleted" error in Chroma Cloud
+        # Use a new collection name since we changed embedding functions
         collection = chroma_client.get_or_create_collection(
-            name="rag_collection_v2"
+            name="rag_collection_v3"
         )
         
         # Fetch existing sources from ChromaDB to populate added_sources on startup
@@ -90,19 +86,6 @@ try:
         print("WARNING: ChromaDB environment variables missing. Vector database not initialized.")
 except Exception as e:
     print(f"Failed to initialize Chroma Cloud Client: {e}")
-
-# Load the embeddings model lazily to prevent worker timeout during app startup
-embedding_model = None
-
-def get_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        print("Loading sentence-transformer all-MiniLM-L6-v2...")
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("Model loaded.")
-        # Force garbage collection to free any temporary memory from model loading
-        gc.collect()
-    return embedding_model
 
 @app.get("/health")
 def health_check():
@@ -185,7 +168,8 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
     if not splits:
         raise HTTPException(status_code=400, detail="Text couldn't be chunked.")
 
-    embeddings = get_embedding_model().encode(splits).tolist()
+    # Use ChromaDB's default embedding function (lightweight, no PyTorch!)
+    embeddings = default_ef(splits)
     ids = [str(uuid.uuid4()) for _ in splits]
     metadatas = [{"source": source_name, "type": source_type} for _ in splits]
 
@@ -195,6 +179,9 @@ def add_texts_to_chroma(text: str, source_name: str, source_type: str):
         documents=splits,
         metadatas=metadatas
     )
+
+    # Force garbage collection to reclaim memory
+    gc.collect()
 
     deterministic_id = hashlib.md5(source_name.encode('utf-8')).hexdigest()
     if not any(s["id"] == deterministic_id for s in added_sources):
@@ -266,11 +253,10 @@ def chat(req: ChatRequest):
         raise HTTPException(status_code=500, detail="Chroma DB collection is not initialized.")
         
     try:
-        # Generate embedding for the query using no_grad context for extra safety
-        with torch.no_grad():
-            query_embedding = get_embedding_model().encode([req.message]).tolist()
+        # Generate embedding for the query using the lightweight default function
+        query_embedding = default_ef([req.message])
         
-        # Retrieve top 3 most relevant documents (reduced from 5 to save memory)
+        # Retrieve top 3 most relevant documents
         results = collection.query(
             query_embeddings=query_embedding,
             n_results=3
@@ -284,7 +270,7 @@ def chat(req: ChatRequest):
         # Construct prompt for the LLM
         prompt = f"You are an intelligent assistant. Use the following context documents to answer the user's question. If the context does not contain the answer, say you don't know based on the provided documents.\n\nContext:\n{context_text}\n\nUser Question: {req.message}\n\nAnswer:"
         
-        # Call Gemini API on Render instead of local Ollama
+        # Call Gemini API
         try:
             from google import genai
         except ImportError:
@@ -297,7 +283,7 @@ def chat(req: ChatRequest):
         # Initialize Gemini Client
         client = genai.Client(api_key=api_key)
         
-        # Use gemini-2.0-flash as the default fast & cheap model (lighter than 2.5)
+        # Use gemini-2.0-flash as the default fast & cheap model
         response = client.models.generate_content(
             model='gemini-2.0-flash',
             contents=prompt,
